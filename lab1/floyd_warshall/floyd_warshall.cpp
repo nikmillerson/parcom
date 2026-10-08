@@ -6,6 +6,7 @@
 #include <thread>
 #include <barrier>
 #include <exception>
+#include <atomic>
 
 using namespace std;
 
@@ -14,7 +15,7 @@ FloydWarshall::FloydWarshall(const vector<vector<int>>& graph) {
     dist = graph;
     next.resize(n, vector<int>(n, -1));
     hasNegativeCycle = false;
-    
+
 
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
@@ -40,9 +41,10 @@ void FloydWarshall::run() {
     vector<int> columnK(n);
     vector<int> nextToK(n);
 
-    barrier syncPoint(numThreads + 1);
+    barrier syncPoint(numThreads);
     vector<thread> workers;
     vector<exception_ptr> exceptions(numThreads);
+    atomic<bool> failed(false);
     workers.reserve(numThreads);
 
     for (unsigned int threadId = 0; threadId < numThreads; threadId++) {
@@ -51,10 +53,27 @@ void FloydWarshall::run() {
 
         workers.emplace_back([&, threadId, begin, end]() {
             for (int k = 0; k < n; k++) {
+                try {
+                    if (!failed.load()) {
+                        // Каждый поток подготавливает свою часть снимков.
+                        // Блоки не пересекаются и отличаются не более чем на
+                        // один элемент.
+                        for (int index = begin; index < end; index++) {
+                            columnK[index] = dist[index][k];
+                            rowK[index] = dist[k][index];
+                            nextToK[index] = next[index][k];
+                        }
+                    }
+                } catch (...) {
+                    exceptions[threadId] = current_exception();
+                    failed.store(true);
+                }
+
+                // Все снимки должны быть готовы до обновления матрицы.
                 syncPoint.arrive_and_wait();
 
                 try {
-                    if (!exceptions[threadId]) {
+                    if (!failed.load()) {
                         for (int i = begin; i < end; i++) {
                             if (columnK[i] == INT_MAX) {
                                 continue;
@@ -71,24 +90,14 @@ void FloydWarshall::run() {
                     }
                 } catch (...) {
                     exceptions[threadId] = current_exception();
+                    failed.store(true);
                 }
 
+                // Следующая итерация k начнётся только после завершения всех
+                // записей текущей итерации.
                 syncPoint.arrive_and_wait();
             }
         });
-    }
-
-    for (int k = 0; k < n; k++) {
-        for (int i = 0; i < n; i++) {
-            columnK[i] = dist[i][k];
-            nextToK[i] = next[i][k];
-        }
-        for (int j = 0; j < n; j++) {
-            rowK[j] = dist[k][j];
-        }
-
-        syncPoint.arrive_and_wait();
-        syncPoint.arrive_and_wait();
     }
 
     for (thread& worker : workers) {
@@ -122,11 +131,11 @@ bool FloydWarshall::hasNegativeCycles() const {
 
 vector<int> FloydWarshall::getPath(int from, int to) const {
     vector<int> path;
-    
+
     if (from < 0 || from >= n || to < 0 || to >= n || dist[from][to] == INT_MAX) {
         return path;
     }
-    
+
     int current = from;
     while (current != to) {
         path.push_back(current);
@@ -136,7 +145,7 @@ vector<int> FloydWarshall::getPath(int from, int to) const {
         }
     }
     path.push_back(to);
-    
+
     return path;
 }
 

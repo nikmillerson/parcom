@@ -16,6 +16,13 @@ private:
     SSL_CTX* ssl_ctx;       // Контекст SSL
     SSL* ssl;               // SSL соединение
     bool use_https;         // Флаг использования HTTPS
+    std::string connected_host;
+    int connected_port;
+    std::string resolved_host;
+    std::string resolved_ip;
+
+    static constexpr int CONNECT_TIMEOUT_MS = 5000;
+    static constexpr int SOCKET_TIMEOUT_SECONDS = 10;
 
     // Структура для хранения компонентов URL
     struct ParsedUrl {
@@ -28,11 +35,17 @@ private:
 
     // Внутренние методы
     ParsedUrl parseUrl(const std::string& url);
+    static std::string resolveIpv4(const std::string& host);
     void createSocket(const std::string& host, int port);
     void initSSL();
     void setupSSL(const std::string& host);
+    void ensureConnection(const ParsedUrl& parsed);
     void sendData(const std::string& data);
     std::string receiveData();
+    void closeConnection();
+
+    // Конструктор для рабочих потоков с уже разрешённым DNS-адресом.
+    HttpClient(const std::string& host, const std::string& ip);
 
 public:
     // Конструктор и деструктор
